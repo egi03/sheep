@@ -298,6 +298,7 @@ def search_articles(request):
         }, status=500)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def get_articles(request):
     """
