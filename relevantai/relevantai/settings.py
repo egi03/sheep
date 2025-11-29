@@ -10,10 +10,23 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
+import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Root of the entire project (contains rag/, scraper_engine/, relevantai/)
+PROJECT_ROOT = BASE_DIR.parent
+
+# Add project root to Python path to allow imports of rag and scraper_engine packages
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load environment variables from .env file
+load_dotenv(PROJECT_ROOT / '.env')
 
 
 # Quick-start development settings - unsuitable for production
@@ -122,3 +135,55 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# =============================================================================
+# RelevantAI RAG Configuration
+# =============================================================================
+
+# API Keys (loaded from environment variables)
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+PINECONE_API_KEY = os.getenv('PINECONE_API_KEY', '')
+PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', 'hn-articles')
+
+# Validate required API keys in production
+if not DEBUG:
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY environment variable is required")
+    if not PINECONE_API_KEY:
+        raise ValueError("PINECONE_API_KEY environment variable is required")
+
+# RAG Settings
+RAG_CONFIG = {
+    'top_k': 5,  # Number of articles to retrieve
+    'use_query_expansion': True,  # Enable query expansion for better search
+    'scraper_pages': 3,  # Number of pages to scrape per run
+}
+
+# Logging configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{asctime}] {levelname:8} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'relevantai': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'chatbot': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+    },
+}

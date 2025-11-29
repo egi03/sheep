@@ -690,6 +690,158 @@
             align-items: center;
             gap: 8px;
         }
+
+        /* RAG Enhanced Styles */
+        .ai-answer {
+            margin-bottom: 20px;
+            line-height: 1.8;
+        }
+
+        .confidence-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 8px;
+        }
+
+        .confidence-high {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+
+        .confidence-medium {
+            background: rgba(234, 179, 8, 0.2);
+            color: #eab308;
+        }
+
+        .confidence-low {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        .key-insights {
+            margin: 20px 0;
+            padding: 20px;
+            background: rgba(6, 182, 212, 0.1);
+            border-radius: 16px;
+            border-left: 4px solid var(--primary-color);
+        }
+
+        .key-insights-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .key-insights-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .key-insights-list li {
+            padding: 8px 0;
+            padding-left: 24px;
+            position: relative;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+
+        .key-insights-list li::before {
+            content: '→';
+            position: absolute;
+            left: 0;
+            color: var(--primary-color);
+        }
+
+        .sources-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin: 24px 0 16px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .source-card {
+            background-color: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 16px 20px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .source-card:hover {
+            background-color: rgba(30, 41, 59, 0.8);
+            transform: translateX(4px);
+            border-color: rgba(6, 182, 212, 0.3);
+        }
+
+        .source-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+
+        .source-card-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 1rem;
+            flex: 1;
+            padding-right: 12px;
+        }
+
+        .relevance-score {
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            background: var(--primary-gradient);
+            color: white;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .source-card-summary {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .source-card-meta {
+            display: flex;
+            gap: 16px;
+            margin-top: 10px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .category-tag {
+            padding: 2px 10px;
+            background: rgba(147, 51, 234, 0.2);
+            color: #a78bfa;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .mode-indicator {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            margin-left: auto;
+        }
     </style>
 </head>
 <body>
@@ -831,7 +983,7 @@
             const typingId = showTypingIndicator();
 
             try {
-                // Fetch articles from API
+                // Use the enhanced API endpoint
                 const response = await fetch('/api/articles/', {
                     method: 'POST',
                     headers: {
@@ -846,10 +998,17 @@
                 // Remove typing indicator
                 removeTypingIndicator(typingId);
 
-                if (data.success && data.articles.length > 0) {
-                    addAIResponse(message, data.articles);
+                if (data.success) {
+                    // Check if we have a RAG response with answer
+                    if (data.answer && data.answer.trim()) {
+                        addRAGResponse(message, data);
+                    } else if (data.articles && data.articles.length > 0) {
+                        addRAGResponse(message, data);
+                    } else {
+                        addMessage("I couldn't find any articles matching your query. Try a different topic!", 'ai');
+                    }
                 } else {
-                    addMessage("I couldn't find any articles matching your query. Try a different topic!", 'ai');
+                    addMessage(data.error || "Sorry, there was an error. Please try again.", 'ai');
                 }
             } catch (error) {
                 removeTypingIndicator(typingId);
@@ -891,39 +1050,28 @@
                 const imageUrl = `https://picsum.photos/seed/${article.id}/800/400`;
                 
                 // Process summary
-                let summaryText = article.story_text || "";
+                let summaryText = article.summary || article.story_text || "";
                 // Strip HTML
                 let tmp = document.createElement("DIV");
                 tmp.innerHTML = summaryText;
                 summaryText = tmp.textContent || tmp.innerText || "";
                 
                 if (!summaryText) {
-                    summaryText = "Click to read the full discussion and details about this topic on Hacker News.";
-                } else {
-                    // Get first 2 sentences
-                    const matches = summaryText.match(/[^.!?]+[.!?]+/g);
-                    if (matches && matches.length > 0) {
-                        summaryText = matches.slice(0, 2).join(' ');
-                    }
+                    summaryText = "Click to read the full discussion and details about this topic.";
+                } else if (summaryText.length > 150) {
+                    summaryText = summaryText.substring(0, 150) + '...';
                 }
 
-                // Format date
-                const dateObj = new Date(article.created_at);
-                const day = String(dateObj.getDate()).padStart(2, '0');
-                const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-                const year = dateObj.getFullYear();
-                const dateStr = `${day}.${month}.${year}.`;
+                const category = article.category || 'Other';
 
                 return `
-                <div class="article-card" onclick="openArticle('${article.id}', '${escapeHtml(article.title).replace(/'/g, "\\'")}', '${escapeHtml(article.url)}', '${escapeHtml(article.author)}', '${dateStr}', '${imageUrl}')">
+                <div class="article-card" onclick="openArticle('${article.id}', '${escapeHtml(article.title).replace(/'/g, "\\'")}', '${escapeHtml(article.url)}', '${escapeHtml(article.author || 'Unknown')}', '', '${imageUrl}')">
                     <img src="${imageUrl}" class="article-image" alt="Article cover" loading="lazy">
                     <div class="article-content">
                         <h4 class="article-title">${escapeHtml(article.title)}</h4>
                         <p class="article-summary">${escapeHtml(summaryText)}</p>
                         <div class="article-meta">
-                            <span style="margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 0.85rem;">
-                                ${dateStr}
-                            </span>
+                            <span class="category-tag">${escapeHtml(category)}</span>
                         </div>
                     </div>
                 </div>
@@ -938,6 +1086,100 @@
                         </div>
                     </div>
                     <div class="message-time">${time}</div>
+                </div>
+            `;
+            
+            messagesArea.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        // Add RAG-enhanced response with answer, insights, and sources
+        function addRAGResponse(query, data) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message message-ai';
+            
+            const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const answer = data.answer || '';
+            const confidence = data.confidence || 'low';
+            const keyInsights = data.key_insights || [];
+            const sources = data.articles || data.sources || [];
+            const mode = data.mode || 'rag';
+            
+            // Build confidence badge
+            const confidenceClass = confidence === 'high' ? 'confidence-high' : 
+                                   confidence === 'medium' ? 'confidence-medium' : 'confidence-low';
+            const confidenceBadge = answer ? `<span class="confidence-badge ${confidenceClass}">${confidence} confidence</span>` : '';
+            
+            // Build key insights section
+            let insightsHtml = '';
+            if (keyInsights.length > 0) {
+                insightsHtml = `
+                    <div class="key-insights">
+                        <div class="key-insights-title">💡 Key Insights</div>
+                        <ul class="key-insights-list">
+                            ${keyInsights.map(insight => `<li>${escapeHtml(insight)}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+            
+            // Build sources section
+            let sourcesHtml = '';
+            if (sources.length > 0) {
+                sourcesHtml = `
+                    <div class="sources-title">📚 Sources (${sources.length})</div>
+                    ${sources.map(source => {
+                        const relevanceScore = source.relevance_score ? 
+                            `<span class="relevance-score">${Math.round(source.relevance_score * 100)}% match</span>` : '';
+                        const summary = source.summary ? 
+                            (source.summary.length > 200 ? source.summary.substring(0, 200) + '...' : source.summary) : 
+                            'No summary available';
+                        const category = source.category || 'Other';
+                        const id = source.id || source.url.split('/').pop() || 'article';
+                        
+                        return `
+                            <div class="source-card" onclick="window.open('${escapeHtml(source.url)}', '_blank')">
+                                <div class="source-card-header">
+                                    <div class="source-card-title">${escapeHtml(source.title)}</div>
+                                    ${relevanceScore}
+                                </div>
+                                <div class="source-card-summary">${escapeHtml(summary)}</div>
+                                <div class="source-card-meta">
+                                    <span class="category-tag">${escapeHtml(category)}</span>
+                                    ${source.author ? `<span>by ${escapeHtml(source.author)}</span>` : ''}
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                `;
+            }
+            
+            // Mode indicator
+            const modeIndicator = mode === 'rag' ? 
+                '<span class="mode-indicator">🤖 AI-Powered</span>' : 
+                '<span class="mode-indicator">📂 Local Search</span>';
+            
+            // Build full response
+            let responseContent = '';
+            if (answer) {
+                responseContent = `
+                    <div class="ai-answer">
+                        <p>${escapeHtml(answer)}</p>
+                        ${confidenceBadge}
+                    </div>
+                `;
+            } else {
+                responseContent = `
+                    <p>Here are some relevant articles I found for "${escapeHtml(query)}":</p>
+                `;
+            }
+            
+            messageDiv.innerHTML = `
+                <div class="message-content">
+                    ${responseContent}
+                    ${insightsHtml}
+                    ${sourcesHtml}
+                    <div class="message-time">${time} ${modeIndicator}</div>
                 </div>
             `;
             
