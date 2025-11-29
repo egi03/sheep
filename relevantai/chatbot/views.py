@@ -692,3 +692,53 @@ def debug_system(request):
         'success': True,
         'debug': debug_info
     })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def login_api(request):
+    """API endpoint for user login."""
+    try:
+        data = json.loads(request.body)
+        username = data.get('username')
+        password = data.get('password')
+        
+        user = authenticate(request, username=username, password=password)
+        if user is not None:
+            login(request, user)
+            return JsonResponse({'success': True, 'username': user.username})
+        else:
+            return JsonResponse({'success': False, 'error': 'Invalid credentials'}, status=401)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def signup_api(request):
+    """API endpoint for user registration."""
+    try:
+        data = json.loads(request.body)
+        username = data.get('username')
+        password = data.get('password')
+        email = data.get('email', '')
+        
+        if not username or not password:
+            return JsonResponse({'success': False, 'error': 'Username and password are required'}, status=400)
+
+        if User.objects.filter(username=username).exists():
+            return JsonResponse({'success': False, 'error': 'Username already exists'}, status=400)
+            
+        user = User.objects.create_user(username=username, password=password, email=email)
+        login(request, user)
+        return JsonResponse({'success': True, 'username': user.username})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def logout_api(request):
+    """API endpoint for user logout."""
+    logout(request)
+    return JsonResponse({'success': True})
