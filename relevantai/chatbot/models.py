@@ -54,6 +54,7 @@ class ChatSession(models.Model):
     """Model to track chat sessions for analytics."""
     
     session_id = models.CharField(max_length=255, unique=True, db_index=True)
+    interested_topics = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

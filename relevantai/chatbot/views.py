@@ -117,6 +117,7 @@ def ask_question(request):
     """
     API endpoint to ask a question to the RAG system.
     This is the main Q&A endpoint that returns intelligent answers with sources.
+    Includes user memory & personalization based on chat history.
     """
     try:
         data = json.loads(request.body)
@@ -141,11 +142,36 @@ def ask_question(request):
         
         if rag:
             try:
-                # Use the RAG system to answer the question
+                # Count user messages in this session
+                user_message_count = ChatMessage.objects.filter(
+                    session=session,
+                    message_type='user'
+                ).count()
+                
+                # Extract interests every 3 messages
+                if user_message_count % 3 == 0 and user_message_count > 0:
+                    recent_queries = list(
+                        ChatMessage.objects.filter(
+                            session=session,
+                            message_type='user'
+                        ).order_by('-created_at')[:5].values_list('content', flat=True)
+                    )
+                    if recent_queries:
+                        try:
+                            interests = rag.extract_user_interests(recent_queries)
+                            if interests:
+                                session.interested_topics = interests
+                                session.save(update_fields=['interested_topics'])
+                                logger.info(f"Updated session interests: {interests}")
+                        except Exception as e:
+                            logger.warning(f"Failed to extract interests: {e}")
+                
+                # Use the RAG system with personalization
                 result = rag.ask(
                     question=question,
                     top_k=settings.RAG_CONFIG.get('top_k', 5),
-                    category=data.get('category')
+                    category=data.get('category'),
+                    user_interests=session.interested_topics or []
                 )
                 
                 # Save assistant message with full context
@@ -166,6 +192,7 @@ def ask_question(request):
                     'key_insights': result.get('key_insights', []),
                     'sources': result.get('sources', []),
                     'expanded_query': result.get('expanded_query', ''),
+                    'user_interests': session.interested_topics or [],
                     'mode': 'rag'
                 })
                 
