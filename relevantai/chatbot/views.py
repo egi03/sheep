@@ -146,9 +146,10 @@ def ask_question(request):
             content=question
         )
         
-        # Set session title from first message if not set
+        # Set session title from first message if not set (first 2 words)
         if not session.title:
-            session.title = question[:50] + ('...' if len(question) > 50 else '')
+            words = question.split()[:2]
+            session.title = ' '.join(words) + ('...' if len(question.split()) > 2 else '')
             session.save(update_fields=['title'])
         
         # Try RAG system first
@@ -352,7 +353,7 @@ def search_articles(request):
 def get_articles(request):
     """
     Legacy API endpoint for compatibility with existing frontend.
-    Wraps the search functionality.
+    Wraps the search functionality and saves chat history.
     """
     print("\n" + "=" * 60)
     print("GET_ARTICLES ENDPOINT CALLED")
@@ -370,6 +371,20 @@ def get_articles(request):
                 'success': False,
                 'error': 'Query is required'
             }, status=400)
+        
+        # Get session and save user message for chat history
+        session = get_or_create_session(request)
+        ChatMessage.objects.create(
+            session=session,
+            message_type='user',
+            content=query
+        )
+        
+        # Set session title from first message if not set (first 2 words)
+        if not session.title:
+            words = query.split()[:2]
+            session.title = ' '.join(words) + ('...' if len(query.split()) > 2 else '')
+            session.save(update_fields=['title'])
         
         # Debug: Check database state
         total_articles = Article.objects.count()
@@ -417,6 +432,16 @@ def get_articles(request):
                 
                 print(f"[DEBUG] Formatted {len(articles)} articles for response")
                 
+                # Save assistant message for chat history
+                ChatMessage.objects.create(
+                    session=session,
+                    message_type='assistant',
+                    content=result.get('answer', ''),
+                    confidence=result.get('confidence', ''),
+                    key_insights=result.get('key_insights', []),
+                    sources=result.get('sources', [])
+                )
+                
                 return JsonResponse({
                     'success': True,
                     'articles': articles,
@@ -451,6 +476,15 @@ def get_articles(request):
             'author': a.author or 'Unknown',
             'category': a.category,
         } for a in articles]
+        
+        # Save fallback response for chat history
+        fallback_answer = f"Found {len(results)} articles matching your query." if results else "No articles found."
+        ChatMessage.objects.create(
+            session=session,
+            message_type='assistant',
+            content=fallback_answer,
+            sources=[{'title': r['title'], 'url': r['url'], 'summary': r['summary']} for r in results]
+        )
         
         return JsonResponse({
             'success': True,
@@ -740,12 +774,13 @@ def get_chat_sessions(request):
     
     sessions_data = []
     for session in sessions:
-        # Get first message as title if no title set
+        # Get first message as title if no title set (first 2 words)
         title = session.title
         if not title:
             first_msg = session.messages.filter(message_type='user').first()
             if first_msg:
-                title = first_msg.content[:50] + ('...' if len(first_msg.content) > 50 else '')
+                words = first_msg.content.split()[:2]
+                title = ' '.join(words) + ('...' if len(first_msg.content.split()) > 2 else '')
             else:
                 title = 'New Chat'
         
