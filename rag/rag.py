@@ -412,16 +412,19 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
                         "answer": result.answer, "confidence": result.confidence,
                         "key_insights": result.key_insights,
                         "sources": [{"title": a["title"], "url": a["url"], "summary": a["summary"],
+                                    "category": a.get("category", "Other"), "author": a.get("author", ""),
                                     "relevance_score": a["relevance_score"]} for a in articles],
                         "expanded_query": expanded_query
                     }
                 except Exception as e:
                     if "rate" in str(e).lower():
                         return {"answer": "High demand. Try again shortly.", "confidence": "low",
-                               "key_insights": [], "sources": [{"title": a["title"], "url": a["url"]} for a in articles],
+                               "key_insights": [], "sources": [{"title": a["title"], "url": a["url"],
+                                    "category": a.get("category", "Other"), "author": a.get("author", "")} for a in articles],
                                "expanded_query": expanded_query, "error": "rate_limit"}
                     return {"answer": "Couldn't generate answer. See sources:", "confidence": "low",
-                           "key_insights": [], "sources": [{"title": a["title"], "url": a["url"]} for a in articles],
+                           "key_insights": [], "sources": [{"title": a["title"], "url": a["url"],
+                                    "category": a.get("category", "Other"), "author": a.get("author", "")} for a in articles],
                            "expanded_query": expanded_query, "error": str(e)}
         except ValidationError:
             raise
