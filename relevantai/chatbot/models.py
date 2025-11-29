@@ -76,6 +76,7 @@ class ChatSession(models.Model):
         blank=True,
         related_name='chat_sessions'
     )
+    title = models.CharField(max_length=255, blank=True, default='')
     interested_topics = models.JSONField(default=list, blank=True)
     interest_profile = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

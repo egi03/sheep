@@ -146,6 +146,11 @@ def ask_question(request):
             content=question
         )
         
+        # Set session title from first message if not set
+        if not session.title:
+            session.title = question[:50] + ('...' if len(question) > 50 else '')
+            session.save(update_fields=['title'])
+        
         # Try RAG system first
         rag = get_rag_instance()
         
@@ -719,3 +724,132 @@ def logout_api(request):
     """API endpoint for user logout."""
     logout(request)
     return JsonResponse({'success': True})
+
+
+# ============================================================================
+# Chat History API Endpoints
+# ============================================================================
+
+@require_http_methods(["GET"])
+def get_chat_sessions(request):
+    """Get all chat sessions for the current user."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+    
+    sessions = ChatSession.objects.filter(user=request.user).order_by('-updated_at')
+    
+    sessions_data = []
+    for session in sessions:
+        # Get first message as title if no title set
+        title = session.title
+        if not title:
+            first_msg = session.messages.filter(message_type='user').first()
+            if first_msg:
+                title = first_msg.content[:50] + ('...' if len(first_msg.content) > 50 else '')
+            else:
+                title = 'New Chat'
+        
+        sessions_data.append({
+            'id': session.session_id,
+            'title': title,
+            'created_at': session.created_at.isoformat(),
+            'updated_at': session.updated_at.isoformat(),
+            'message_count': session.messages.count()
+        })
+    
+    return JsonResponse({'success': True, 'sessions': sessions_data})
+
+
+@require_http_methods(["GET"])
+def get_chat_messages(request, session_id):
+    """Get all messages for a specific chat session."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+    
+    try:
+        session = ChatSession.objects.get(session_id=session_id, user=request.user)
+    except ChatSession.DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Session not found'}, status=404)
+    
+    messages = session.messages.order_by('created_at')
+    
+    messages_data = []
+    for msg in messages:
+        messages_data.append({
+            'id': msg.id,
+            'type': msg.message_type,
+            'content': msg.content,
+            'confidence': msg.confidence,
+            'key_insights': msg.key_insights,
+            'sources': msg.sources,
+            'created_at': msg.created_at.isoformat()
+        })
+    
+    return JsonResponse({
+        'success': True,
+        'session_id': session_id,
+        'title': session.title or 'Chat',
+        'messages': messages_data
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def create_chat_session(request):
+    """Create a new chat session."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+    
+    new_session_id = str(uuid.uuid4())
+    session = ChatSession.objects.create(
+        session_id=new_session_id,
+        user=request.user,
+        title=''
+    )
+    
+    # Update the Django session to use the new chat session
+    request.session['chat_session_id'] = new_session_id
+    
+    return JsonResponse({
+        'success': True,
+        'session_id': new_session_id,
+        'created_at': session.created_at.isoformat()
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def switch_chat_session(request, session_id):
+    """Switch to an existing chat session."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+    
+    try:
+        session = ChatSession.objects.get(session_id=session_id, user=request.user)
+    except ChatSession.DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Session not found'}, status=404)
+    
+    # Update the Django session to use this chat session
+    request.session['chat_session_id'] = session_id
+    
+    return JsonResponse({'success': True, 'session_id': session_id})
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def delete_chat_session(request, session_id):
+    """Delete a chat session."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+    
+    try:
+        session = ChatSession.objects.get(session_id=session_id, user=request.user)
+        session.delete()
+        
+        # If this was the current session, clear it
+        if request.session.get('chat_session_id') == session_id:
+            del request.session['chat_session_id']
+        
+        return JsonResponse({'success': True})
+    except ChatSession.DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Session not found'}, status=404)
