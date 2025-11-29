@@ -126,7 +126,7 @@ def ask_question(request):
     API endpoint to ask a question to the RAG system.
     This is the main Q&A endpoint that returns intelligent answers with sources.
     Includes user memory & personalization based on chat history.
-    Uses semantic topic matching for interest extraction and personalization.
+    Uses fixed category scoring for interest extraction and personalization.
     """
     try:
         data = json.loads(request.body)
@@ -158,47 +158,36 @@ def ask_question(request):
                 ).count()
                 
                 # Load existing interest profile from session
+                # Format: {"Security": 0.8, "AI/ML": 0.3, ...}
                 interest_profile = session.interest_profile or {}
                 
-                # Extract interests every 3 messages using semantic matching
-                if user_message_count % 3 == 0 and user_message_count > 0:
-                    recent_queries = list(
-                        ChatMessage.objects.filter(
-                            session=session,
-                            message_type='user'
-                        ).order_by('-created_at')[:5].values_list('content', flat=True)
-                    )
-                    if recent_queries:
-                        try:
-                            # Extract interests using TopicMatcher (returns list of topic strings)
-                            new_interests = rag.extract_user_interests(recent_queries)
-                            if new_interests:
-                                # Update interest profile with new interests
-                                # Each interest gets a confidence boost based on frequency
-                                for topic in new_interests:
-                                    if topic in interest_profile:
-                                        # Increase confidence for existing interests
-                                        interest_profile[topic] = min(1.0, interest_profile[topic] + 0.1)
-                                    else:
-                                        # Add new interest with initial confidence
-                                        interest_profile[topic] = 0.5
-                                
-                                # Save updated profile
-                                session.interest_profile = interest_profile
-                                session.save(update_fields=['interest_profile'])
-                                logger.info(f"Updated session interest profile: {list(interest_profile.keys())}")
-                        except Exception as e:
-                            logger.warning(f"Failed to extract interests: {e}")
+                # Update interests every message using the new fixed category system
+                try:
+                    # Use RAG's topic_matcher to classify the question
+                    updated_profile = rag.update_interest_profile(interest_profile, question)
+                    session.interest_profile = updated_profile
+                    session.save(update_fields=['interest_profile'])
+                    interest_profile = updated_profile
+                    logger.debug(f"Updated interest profile: {interest_profile}")
+                except Exception as e:
+                    logger.warning(f"Failed to update interest profile: {e}")
                 
-                # Convert interest profile to list of topics for RAG (backward compatible)
-                user_interests = list(interest_profile.keys()) if interest_profile else []
+                # Get top interests for display
+                top_interests = [
+                    cat for cat, score in sorted(
+                        interest_profile.items(), 
+                        key=lambda x: x[1], 
+                        reverse=True
+                    )[:5] 
+                    if score >= 0.2
+                ]
                 
                 # Use the RAG system with personalization
                 result = rag.ask(
                     question=question,
                     top_k=settings.RAG_CONFIG.get('top_k', 5),
                     category=data.get('category'),
-                    user_interests=user_interests
+                    user_interests=top_interests
                 )
                 
                 # Save assistant message with full context
@@ -219,7 +208,7 @@ def ask_question(request):
                     'key_insights': result.get('key_insights', []),
                     'sources': result.get('sources', []),
                     'expanded_query': result.get('expanded_query', ''),
-                    'user_interests': user_interests,
+                    'user_interests': top_interests,
                     'interest_profile': interest_profile,
                     'mode': 'rag'
                 })
@@ -569,24 +558,12 @@ def get_stats(request):
 @require_http_methods(["GET"])
 def get_categories(request):
     """
-    Get available article categories.
+    Get available article categories (using fixed categories).
     """
-    categories = [
-        'AI/ML',
-        'Security',
-        'Programming',
-        'DevOps',
-        'Business',
-        'Other'
-    ]
+    from rag.interests import CATEGORY_NAMES
     
-    # Get actual categories from database
-    db_categories = Article.objects.filter(
-        is_indexed=True
-    ).values_list('category', flat=True).distinct()
-    
-    # Merge and deduplicate
-    all_categories = list(set(categories) | set(db_categories))
+    # Return the fixed categories
+    all_categories = CATEGORY_NAMES.copy()
     all_categories.sort()
     
     return JsonResponse({

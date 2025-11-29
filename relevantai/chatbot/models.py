@@ -19,6 +19,10 @@ class Article(models.Model):
     tags = models.JSONField(default=list, blank=True)
     key_points = models.JSONField(default=list, blank=True)
     
+    # NEW: Category scores for personalization (stores scores for each fixed category)
+    # Format: {"Security": 0.8, "AI/ML": 0.2, "Programming": 0.1, ...}
+    category_scores = models.JSONField(default=dict, blank=True)
+    
     # Metadata
     source = models.CharField(max_length=255, default='thehackernews.com')
     topics = models.JSONField(default=list, blank=True)
@@ -48,12 +52,30 @@ class Article(models.Model):
         self.is_indexed = True
         self.indexed_at = timezone.now()
         self.save(update_fields=['is_indexed', 'indexed_at'])
+    
+    def get_category_scores_dict(self) -> dict:
+        """Get category scores as dict, computing if not present."""
+        if self.category_scores:
+            return self.category_scores
+        # Fallback: return empty or compute from category field
+        from rag.interests import FIXED_CATEGORIES
+        scores = {cat: 0.0 for cat in FIXED_CATEGORIES.keys()}
+        if self.category in scores:
+            scores[self.category] = 0.8
+        return scores
 
 
 class ChatSession(models.Model):
     """Model to track chat sessions for analytics."""
     
     session_id = models.CharField(max_length=255, unique=True, db_index=True)
+    user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='chat_sessions'
+    )
     interested_topics = models.JSONField(default=list, blank=True)
     interest_profile = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

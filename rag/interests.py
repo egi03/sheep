@@ -3,6 +3,12 @@ Topic and Interest Matching System for RelevantAI.
 
 This module provides semantic matching between user interests and article topics
 using embeddings for accurate similarity scoring.
+
+Key Design Decisions:
+- Uses ONLY fixed top-level categories for scoring (not unbounded topics)
+- Articles get classified with scores for each category at indexing time
+- User interests are tracked per-category with confidence scores
+- Simple, predictable personalization based on category overlap
 """
 
 from typing import List, Dict, Any, Optional, Tuple
@@ -10,71 +16,69 @@ from pydantic import BaseModel, Field
 import numpy as np
 
 
-# Standardized topic taxonomy - hierarchical structure
-TOPIC_TAXONOMY = {
+# Fixed categories - these are the ONLY topics we track for personalization
+# Each category has semantic descriptors for better embedding matching
+FIXED_CATEGORIES = {
     "Security": {
-        "subtopics": [
-            "Ransomware", "Malware", "Phishing", "Zero-day", "Vulnerabilities",
-            "Data Breach", "APT", "Threat Intelligence", "Penetration Testing",
-            "Encryption", "Authentication", "Access Control", "Network Security",
-            "Application Security", "Cloud Security", "IoT Security", "Mobile Security"
-        ],
-        "keywords": ["hack", "attack", "exploit", "CVE", "patch", "security", "cyber"]
+        "description": "Cybersecurity, hacking, vulnerabilities, ransomware, malware, data breaches, penetration testing, encryption, authentication, threat intelligence, zero-day exploits, CVE patches",
+        "keywords": ["security", "hack", "attack", "exploit", "CVE", "patch", "cyber", "ransomware", 
+                     "malware", "phishing", "vulnerability", "breach", "encryption", "authentication",
+                     "penetration", "threat", "zero-day", "firewall", "intrusion"]
     },
     "AI/ML": {
-        "subtopics": [
-            "Machine Learning", "Deep Learning", "Neural Networks", "NLP",
-            "Computer Vision", "LLM", "GPT", "Transformers", "Generative AI",
-            "Reinforcement Learning", "MLOps", "AI Ethics", "AI Safety"
-        ],
-        "keywords": ["ai", "ml", "model", "training", "inference", "neural", "gpt", "llm"]
+        "description": "Artificial intelligence, machine learning, deep learning, neural networks, NLP, LLMs, GPT, transformers, generative AI, computer vision, MLOps, AI ethics and safety",
+        "keywords": ["ai", "ml", "machine learning", "deep learning", "neural", "gpt", "llm", 
+                     "transformer", "model", "training", "inference", "nlp", "computer vision",
+                     "generative", "chatgpt", "openai", "anthropic", "claude"]
     },
     "Programming": {
-        "subtopics": [
-            "Python", "JavaScript", "TypeScript", "Rust", "Go", "Java", "C++",
-            "Web Development", "Backend", "Frontend", "API", "Microservices",
-            "Testing", "Code Review", "Refactoring", "Design Patterns"
-        ],
-        "keywords": ["code", "programming", "developer", "software", "framework", "library"]
+        "description": "Software development, programming languages, Python, JavaScript, TypeScript, Rust, Go, web development, APIs, frameworks, testing, code quality, design patterns",
+        "keywords": ["code", "programming", "developer", "software", "framework", "library",
+                     "python", "javascript", "typescript", "rust", "go", "java", "api",
+                     "testing", "refactor", "frontend", "backend", "web development"]
     },
     "DevOps": {
-        "subtopics": [
-            "Kubernetes", "Docker", "CI/CD", "Infrastructure", "Monitoring",
-            "Observability", "GitOps", "Terraform", "Ansible", "SRE",
-            "Incident Response", "On-call", "Deployment", "Scaling"
-        ],
-        "keywords": ["deploy", "container", "cluster", "pipeline", "infrastructure"]
+        "description": "DevOps practices, Kubernetes, Docker, CI/CD pipelines, infrastructure as code, monitoring, observability, GitOps, Terraform, Ansible, SRE, deployment, scaling",
+        "keywords": ["devops", "kubernetes", "docker", "container", "ci/cd", "pipeline",
+                     "infrastructure", "terraform", "ansible", "monitoring", "observability",
+                     "deployment", "scaling", "sre", "gitops", "helm"]
     },
     "Cloud": {
-        "subtopics": [
-            "AWS", "Azure", "GCP", "Serverless", "Lambda", "Cloud Native",
-            "Multi-cloud", "Hybrid Cloud", "Cloud Migration", "Cloud Cost",
-            "Cloud Architecture", "PaaS", "SaaS", "IaaS"
-        ],
-        "keywords": ["cloud", "aws", "azure", "gcp", "serverless", "saas"]
+        "description": "Cloud computing, AWS, Azure, GCP, serverless, Lambda, cloud native, multi-cloud, cloud migration, cloud architecture, PaaS, SaaS, IaaS",
+        "keywords": ["cloud", "aws", "azure", "gcp", "serverless", "lambda", "ec2", "s3",
+                     "cloud native", "saas", "paas", "iaas", "migration", "multi-cloud"]
     },
     "Data": {
-        "subtopics": [
-            "Data Engineering", "Data Science", "Analytics", "Big Data",
-            "Data Pipeline", "ETL", "Data Warehouse", "Data Lake",
-            "SQL", "NoSQL", "Streaming", "Real-time Analytics"
-        ],
-        "keywords": ["data", "database", "analytics", "warehouse", "pipeline"]
+        "description": "Data engineering, data science, analytics, big data, ETL pipelines, data warehouses, data lakes, SQL, NoSQL, streaming, real-time analytics, databases",
+        "keywords": ["data", "database", "analytics", "warehouse", "pipeline", "etl",
+                     "sql", "nosql", "streaming", "bigquery", "snowflake", "spark",
+                     "kafka", "redis", "postgresql", "mongodb"]
     },
     "Privacy": {
-        "subtopics": [
-            "GDPR", "Data Privacy", "Compliance", "PII", "Anonymization",
-            "Consent", "Data Protection", "Privacy Engineering", "CCPA"
-        ],
-        "keywords": ["privacy", "gdpr", "compliance", "personal data", "consent"]
+        "description": "Data privacy, GDPR, CCPA, compliance, PII protection, anonymization, consent management, data protection regulations, privacy engineering",
+        "keywords": ["privacy", "gdpr", "ccpa", "compliance", "pii", "consent", 
+                     "anonymization", "data protection", "regulation", "personal data"]
     }
+}
+
+# List of category names for easy iteration
+CATEGORY_NAMES = list(FIXED_CATEGORIES.keys())
+
+
+# Legacy taxonomy for backward compatibility (deprecated - use FIXED_CATEGORIES)
+TOPIC_TAXONOMY = {
+    cat: {
+        "subtopics": [],  # Not used in new system
+        "keywords": data["keywords"]
+    }
+    for cat, data in FIXED_CATEGORIES.items()
 }
 
 
 class UserInterest(BaseModel):
     """Represents a user's interest with confidence score."""
     topic: str
-    subtopics: List[str] = Field(default_factory=list)
+    subtopics: List[str] = Field(default_factory=list)  # Deprecated - kept for compatibility
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     query_count: int = Field(default=1)
     last_seen: Optional[str] = None
@@ -89,22 +93,94 @@ class UserInterest(BaseModel):
         self.confidence *= factor
 
 
+class CategoryScores(BaseModel):
+    """
+    Scores for each fixed category (0.0 to 1.0).
+    Used for both articles and user interests.
+    """
+    Security: float = Field(default=0.0, ge=0.0, le=1.0)
+    AI_ML: float = Field(default=0.0, ge=0.0, le=1.0, alias="AI/ML")
+    Programming: float = Field(default=0.0, ge=0.0, le=1.0)
+    DevOps: float = Field(default=0.0, ge=0.0, le=1.0)
+    Cloud: float = Field(default=0.0, ge=0.0, le=1.0)
+    Data: float = Field(default=0.0, ge=0.0, le=1.0)
+    Privacy: float = Field(default=0.0, ge=0.0, le=1.0)
+    
+    class Config:
+        populate_by_name = True
+    
+    def to_dict(self) -> Dict[str, float]:
+        """Convert to dict with proper category names."""
+        return {
+            "Security": self.Security,
+            "AI/ML": self.AI_ML,
+            "Programming": self.Programming,
+            "DevOps": self.DevOps,
+            "Cloud": self.Cloud,
+            "Data": self.Data,
+            "Privacy": self.Privacy,
+        }
+    
+    @classmethod
+    def from_dict(cls, d: Dict[str, float]) -> "CategoryScores":
+        """Create from dict with category names."""
+        return cls(
+            Security=d.get("Security", 0.0),
+            AI_ML=d.get("AI/ML", 0.0),
+            Programming=d.get("Programming", 0.0),
+            DevOps=d.get("DevOps", 0.0),
+            Cloud=d.get("Cloud", 0.0),
+            Data=d.get("Data", 0.0),
+            Privacy=d.get("Privacy", 0.0),
+        )
+    
+    def get_top_categories(self, n: int = 3, min_score: float = 0.1) -> List[Tuple[str, float]]:
+        """Get top N categories above min_score."""
+        scores = [(k, v) for k, v in self.to_dict().items() if v >= min_score]
+        return sorted(scores, key=lambda x: x[1], reverse=True)[:n]
+    
+    def primary_category(self) -> Optional[str]:
+        """Get the primary (highest scoring) category."""
+        top = self.get_top_categories(n=1, min_score=0.0)
+        return top[0][0] if top and top[0][1] > 0 else None
+
+
 class ArticleTopics(BaseModel):
     """Represents extracted topics from an article."""
     primary_topic: str
-    subtopics: List[str] = Field(default_factory=list)
-    topic_scores: Dict[str, float] = Field(default_factory=dict)
+    subtopics: List[str] = Field(default_factory=list)  # Deprecated
+    topic_scores: Dict[str, float] = Field(default_factory=dict)  # Legacy format
+    category_scores: Optional[CategoryScores] = None  # New: scores per fixed category
     keywords: List[str] = Field(default_factory=list)
+    
+    def get_category_scores(self) -> CategoryScores:
+        """Get category scores, computing from topic_scores if needed."""
+        if self.category_scores:
+            return self.category_scores
+        # Convert legacy topic_scores to CategoryScores
+        return CategoryScores.from_dict(self.topic_scores)
 
 
 class InterestProfile(BaseModel):
-    """Complete interest profile for a user."""
+    """
+    Complete interest profile for a user.
+    Uses fixed categories for consistent scoring.
+    """
+    # New: Fixed category scores
+    category_scores: CategoryScores = Field(default_factory=CategoryScores)
+    
+    # Legacy: Dict of interest name -> UserInterest (deprecated, kept for migration)
     interests: Dict[str, UserInterest] = Field(default_factory=dict)
     topic_embeddings: Dict[str, List[float]] = Field(default_factory=dict)
     last_updated: Optional[str] = None
     
     def get_top_interests(self, n: int = 5) -> List[Tuple[str, float]]:
-        """Get top N interests sorted by confidence."""
+        """Get top N interests sorted by confidence (uses fixed categories)."""
+        # Prefer new category_scores
+        if self.category_scores:
+            return self.category_scores.get_top_categories(n=n, min_score=0.1)
+        
+        # Fallback to legacy interests dict
         sorted_interests = sorted(
             [(k, v.confidence if isinstance(v, UserInterest) else float(v)) 
              for k, v in self.interests.items()],
@@ -115,31 +191,46 @@ class InterestProfile(BaseModel):
     
     def to_list(self) -> List[str]:
         """Convert to simple list of interest names for backward compatibility."""
-        # get_top_interests returns List[Tuple[str, float]] where float is confidence
         return [k for k, confidence in self.get_top_interests(10) if confidence >= 0.3]
+    
+    def to_simple_dict(self) -> Dict[str, float]:
+        """Convert to simple dict of category -> score for storage."""
+        return self.category_scores.to_dict()
+    
+    @classmethod
+    def from_simple_dict(cls, d: Dict[str, float]) -> "InterestProfile":
+        """Create from simple dict of category -> score."""
+        from datetime import datetime, timezone
+        return cls(
+            category_scores=CategoryScores.from_dict(d),
+            last_updated=datetime.now(timezone.utc).isoformat()
+        )
 
 
 class TopicMatcher:
     """
     Semantic topic matching using embeddings.
-    Provides accurate matching between articles and user interests.
+    
+    NEW APPROACH: Only matches against fixed categories, not arbitrary topics.
+    This ensures consistent, predictable personalization.
     """
     
     def __init__(self, embeddings_model=None):
         self.embeddings_model = embeddings_model
+        self._category_embeddings_cache: Dict[str, List[float]] = {}
+        # Legacy cache for backward compatibility
         self._topic_embeddings_cache: Dict[str, List[float]] = {}
     
     def set_embeddings_model(self, model) -> None:
         """Set the embeddings model (OpenAIEmbeddings instance)."""
         self.embeddings_model = model
+        # Clear caches when model changes
+        self._category_embeddings_cache.clear()
+        self._topic_embeddings_cache.clear()
     
     def _get_all_topics(self) -> List[str]:
-        """Get flat list of all topics and subtopics."""
-        topics = []
-        for main_topic, data in TOPIC_TAXONOMY.items():
-            topics.append(main_topic)
-            topics.extend(data["subtopics"])
-        return topics
+        """Get flat list of all topics and subtopics. (Legacy - deprecated)"""
+        return list(FIXED_CATEGORIES.keys())
     
     def _compute_embedding(self, text: str) -> List[float]:
         """Compute embedding for text."""
@@ -151,88 +242,105 @@ class TopicMatcher:
         """Compute cosine similarity between two vectors."""
         a = np.array(vec1)
         b = np.array(vec2)
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+        norm_product = np.linalg.norm(a) * np.linalg.norm(b)
+        if norm_product == 0:
+            return 0.0
+        return float(np.dot(a, b) / norm_product)
     
-    def _cache_topic_embeddings(self) -> None:
-        """Pre-compute embeddings for all taxonomy topics."""
-        if self._topic_embeddings_cache:
+    def _cache_category_embeddings(self) -> None:
+        """Pre-compute embeddings for all fixed categories using their descriptions."""
+        if self._category_embeddings_cache:
             return
         
-        all_topics = self._get_all_topics()
-        for topic in all_topics:
-            self._topic_embeddings_cache[topic.lower()] = self._compute_embedding(topic)
+        for category, data in FIXED_CATEGORIES.items():
+            # Use the rich description for better semantic matching
+            category_text = f"{category}: {data['description']}"
+            self._category_embeddings_cache[category] = self._compute_embedding(category_text)
     
-    def match_text_to_topics(self, text: str, top_k: int = 3) -> Dict[str, float]:
+    def _cache_topic_embeddings(self) -> None:
+        """Legacy: Pre-compute embeddings for taxonomy topics."""
+        if self._topic_embeddings_cache:
+            return
+        # Just cache the category names for backward compatibility
+        for category in FIXED_CATEGORIES.keys():
+            self._topic_embeddings_cache[category.lower()] = self._compute_embedding(category)
+    
+    def classify_text(self, text: str) -> CategoryScores:
         """
-        Match text to taxonomy topics using semantic similarity.
-        Returns dict of topic -> similarity score.
+        Classify text into fixed categories with scores.
+        Returns scores for ALL categories (not just matches).
+        
+        This is the PRIMARY method for topic extraction.
         """
         if not self.embeddings_model:
-            return self._fallback_keyword_match(text)
+            return self._fallback_keyword_classify(text)
         
         try:
-            self._cache_topic_embeddings()
+            self._cache_category_embeddings()
             text_embedding = self._compute_embedding(text)
             
             scores = {}
-            for topic, topic_emb in self._topic_embeddings_cache.items():
-                scores[topic] = self._cosine_similarity(text_embedding, topic_emb)
+            for category, category_emb in self._category_embeddings_cache.items():
+                similarity = self._cosine_similarity(text_embedding, category_emb)
+                # Normalize: embeddings give ~0.7-0.9 for good matches, ~0.5-0.7 for weak
+                # Map to 0-1 range where 0.7 sim -> 0.5 score, 0.9 sim -> 1.0 score
+                normalized = max(0.0, min(1.0, (similarity - 0.5) * 2.5))
+                scores[category] = normalized
             
-            sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            return dict(sorted_scores[:top_k])
+            return CategoryScores.from_dict(scores)
         except Exception:
-            return self._fallback_keyword_match(text)
+            return self._fallback_keyword_classify(text)
     
-    def _fallback_keyword_match(self, text: str) -> Dict[str, float]:
+    def _fallback_keyword_classify(self, text: str) -> CategoryScores:
         """Fallback to keyword matching when embeddings unavailable."""
         text_lower = text.lower()
         scores = {}
         
-        for main_topic, data in TOPIC_TAXONOMY.items():
+        for category, data in FIXED_CATEGORIES.items():
             score = 0.0
+            keywords = data["keywords"]
             
-            if main_topic.lower() in text_lower:
-                score += 0.5
+            # Count keyword matches
+            matches = sum(1 for kw in keywords if kw.lower() in text_lower)
+            if matches > 0:
+                # Normalize: more matches = higher score, max out at 5+ matches
+                score = min(1.0, matches * 0.2)
             
-            for subtopic in data["subtopics"]:
-                if subtopic.lower() in text_lower:
-                    score += 0.3
-            
-            for keyword in data["keywords"]:
-                if keyword.lower() in text_lower:
-                    score += 0.1
-            
-            if score > 0:
-                scores[main_topic] = min(1.0, score)
+            scores[category] = score
         
-        return dict(sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3])
+        return CategoryScores.from_dict(scores)
+    
+    def match_text_to_topics(self, text: str, top_k: int = 3) -> Dict[str, float]:
+        """
+        Legacy method: Match text to taxonomy topics using semantic similarity.
+        Returns dict of topic -> similarity score.
+        
+        DEPRECATED: Use classify_text() instead for fixed category scores.
+        """
+        category_scores = self.classify_text(text)
+        # Return top categories as dict
+        top = category_scores.get_top_categories(n=top_k, min_score=0.0)
+        return dict(top)
+    
+    def _fallback_keyword_match(self, text: str) -> Dict[str, float]:
+        """Fallback to keyword matching when embeddings unavailable."""
+        return self._fallback_keyword_classify(text).to_dict()
     
     def extract_article_topics(self, title: str, summary: str, 
                                 tags: List[str] = None) -> ArticleTopics:
-        """Extract topics from article metadata."""
+        """Extract topics from article metadata using fixed categories."""
         combined_text = f"{title} {summary} {' '.join(tags or [])}"
-        topic_scores = self.match_text_to_topics(combined_text, top_k=5)
+        category_scores = self.classify_text(combined_text)
         
-        primary_topic = "Other"
-        subtopics = []
-        
-        if topic_scores:
-            sorted_topics = sorted(topic_scores.items(), key=lambda x: x[1], reverse=True)
-            
-            for topic_name, score in sorted_topics:
-                for main_topic, data in TOPIC_TAXONOMY.items():
-                    if topic_name.lower() == main_topic.lower():
-                        primary_topic = main_topic
-                        break
-                    if topic_name.lower() in [s.lower() for s in data["subtopics"]]:
-                        subtopics.append(topic_name)
-                        if primary_topic == "Other":
-                            primary_topic = main_topic
+        # Determine primary category
+        top_categories = category_scores.get_top_categories(n=1, min_score=0.0)
+        primary_topic = top_categories[0][0] if top_categories else "Other"
         
         return ArticleTopics(
             primary_topic=primary_topic,
-            subtopics=subtopics[:5],
-            topic_scores=topic_scores,
+            subtopics=[],  # No longer used
+            topic_scores=category_scores.to_dict(),  # Legacy format
+            category_scores=category_scores,  # New format
             keywords=tags or []
         )
     
@@ -243,39 +351,34 @@ class TopicMatcher:
     ) -> Tuple[float, List[str]]:
         """
         Compute match score between article and user interests.
-        Returns (score, list of matching topics).
-        """
-        if not user_interests.interests:
-            return 0.0, []
+        Uses fixed category overlap for consistent scoring.
         
-        matching_topics = []
+        Returns (score, list of matching category names).
+        """
+        article_scores = article_topics.get_category_scores()
+        user_scores = user_interests.category_scores
+        
+        matching_categories = []
         total_score = 0.0
         
-        for interest_name, interest in user_interests.interests.items():
-            interest_lower = interest_name.lower()
+        # Compare scores across all fixed categories
+        for category in CATEGORY_NAMES:
+            article_score = article_scores.to_dict().get(category, 0.0)
+            user_score = user_scores.to_dict().get(category, 0.0)
             
-            if interest_lower == article_topics.primary_topic.lower():
-                match_score = 0.4 * interest.confidence
-                total_score += match_score
-                matching_topics.append(interest_name)
-            
-            for subtopic in article_topics.subtopics:
-                if subtopic.lower() == interest_lower:
-                    match_score = 0.3 * interest.confidence
-                    total_score += match_score
-                    if interest_name not in matching_topics:
-                        matching_topics.append(interest_name)
-            
-            for interest_subtopic in interest.subtopics:
-                if interest_subtopic.lower() in [s.lower() for s in article_topics.subtopics]:
-                    match_score = 0.2 * interest.confidence
-                    total_score += match_score
-            
-            if interest_lower in article_topics.topic_scores:
-                embedding_score = article_topics.topic_scores[interest_lower]
-                total_score += 0.1 * embedding_score * interest.confidence
+            # Both article and user must have meaningful scores for a match
+            if article_score >= 0.2 and user_score >= 0.2:
+                # Score is product of both relevances
+                match_contribution = article_score * user_score
+                total_score += match_contribution
+                
+                if match_contribution >= 0.1:
+                    matching_categories.append(category)
         
-        return min(1.0, total_score), matching_topics
+        # Normalize score (max theoretical is 7.0 if all categories match perfectly)
+        normalized_score = min(1.0, total_score / 2.0)
+        
+        return normalized_score, matching_categories
     
     def should_notify_user(
         self, 
@@ -300,50 +403,71 @@ def update_interest_profile(
 ) -> InterestProfile:
     """
     Update interest profile based on a new query.
-    Uses semantic matching to identify topics in the query.
+    Uses fixed categories for consistent tracking.
+    
+    The new approach:
+    1. Classify the query into fixed categories
+    2. Boost user's interest scores for matching categories
+    3. Apply decay to non-matching categories
     """
     from datetime import datetime, timezone
     
-    topic_scores = topic_matcher.match_text_to_topics(query, top_k=3)
+    # Classify the query into fixed categories
+    query_scores = topic_matcher.classify_text(query)
     
-    for topic_name, score in topic_scores.items():
-        if score < 0.2:
-            continue
+    # Get current scores as dict
+    current_scores = profile.category_scores.to_dict()
+    
+    # Update scores based on query
+    for category in CATEGORY_NAMES:
+        query_score = query_scores.to_dict().get(category, 0.0)
+        current_score = current_scores.get(category, 0.0)
         
-        if topic_name in profile.interests:
-            interest = profile.interests[topic_name]
-            # Ensure we have a UserInterest object
-            if isinstance(interest, UserInterest):
-                interest.boost_confidence(score * 0.15)
-            else:
-                # Replace with proper UserInterest if somehow got corrupted
-                profile.interests[topic_name] = UserInterest(
-                    topic=topic_name,
-                    confidence=min(0.7, float(interest) + score * 0.15) if isinstance(interest, (int, float)) else 0.5,
-                    query_count=1,
-                    last_seen=datetime.now(timezone.utc).isoformat()
-                )
+        if query_score >= 0.2:
+            # Boost: increase score based on query relevance
+            # Use exponential moving average: new = 0.7 * old + 0.3 * query
+            new_score = 0.7 * current_score + 0.3 * query_score
+            current_scores[category] = min(1.0, new_score)
         else:
-            profile.interests[topic_name] = UserInterest(
-                topic=topic_name,
-                confidence=min(0.5, score),
-                query_count=1,
-                last_seen=datetime.now(timezone.utc).isoformat()
-            )
+            # Slight decay for categories not in this query
+            current_scores[category] = current_score * 0.98
     
-    # Decay interests not matched in this query
-    for topic_name, interest in list(profile.interests.items()):
-        if topic_name not in topic_scores:
-            if isinstance(interest, UserInterest):
-                interest.decay_confidence(0.98)
-            # If not UserInterest, leave as-is or remove if too small
+    # Update profile with new scores
+    profile.category_scores = CategoryScores.from_dict(current_scores)
+    profile.last_updated = datetime.now(timezone.utc).isoformat()
     
-    # Remove low-confidence interests
+    # Also update legacy interests dict for backward compatibility
+    for category, score in current_scores.items():
+        if score >= 0.2:
+            if category in profile.interests and isinstance(profile.interests[category], UserInterest):
+                profile.interests[category].confidence = score
+                profile.interests[category].query_count += 1
+            else:
+                profile.interests[category] = UserInterest(
+                    topic=category,
+                    confidence=score,
+                    query_count=1,
+                    last_seen=profile.last_updated
+                )
+    
+    # Remove low-score categories from legacy interests
     profile.interests = {
         k: v for k, v in profile.interests.items() 
-        if (isinstance(v, UserInterest) and v.confidence >= 0.1) or 
-           (isinstance(v, (int, float)) and v >= 0.1)
+        if (isinstance(v, UserInterest) and v.confidence >= 0.15) or 
+           (isinstance(v, (int, float)) and v >= 0.15)
     }
     
-    profile.last_updated = datetime.now(timezone.utc).isoformat()
     return profile
+
+
+def classify_text_to_categories(text: str, topic_matcher: TopicMatcher) -> Dict[str, float]:
+    """
+    Convenience function to classify any text into fixed categories.
+    Returns dict of category -> score.
+    """
+    return topic_matcher.classify_text(text).to_dict()
+
+
+def get_category_names() -> List[str]:
+    """Return the list of fixed category names."""
+    return CATEGORY_NAMES.copy()

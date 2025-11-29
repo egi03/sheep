@@ -118,11 +118,26 @@ class Command(BaseCommand):
                         author=article.author
                     )
 
-                    # Update local article with summary data
+                    # Compute category scores for personalization
+                    category_scores = {}
+                    try:
+                        article_topics = rag.topic_matcher.extract_article_topics(
+                            title=article.title,
+                            summary=doc.summary,
+                            tags=doc.tags
+                        )
+                        category_scores = article_topics.get_category_scores().to_dict()
+                    except Exception as e:
+                        self.stdout.write(self.style.WARNING(
+                            f'    Could not compute category scores: {e}'
+                        ))
+
+                    # Update local article with summary data and category scores
                     article.summary = doc.summary
                     article.category = doc.category
                     article.tags = doc.tags
                     article.key_points = doc.key_points
+                    article.category_scores = category_scores
                     article.mark_indexed()
 
                     success_count += 1

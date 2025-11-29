@@ -191,22 +191,30 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
             return query
 
     def extract_user_interests(self, chat_history: List[str]) -> List[str]:
-        """Extract user interests from chat history using semantic matching."""
+        """
+        Extract user interests from chat history using fixed category matching.
+        Returns list of category names that the user is interested in.
+        """
         if not chat_history:
             return []
         
         try:
-            from .interests import InterestProfile, update_interest_profile
+            from .interests import InterestProfile, CategoryScores, update_interest_profile, CATEGORY_NAMES
             
             profile = InterestProfile()
             for query in chat_history:
                 profile = update_interest_profile(profile, query, self.topic_matcher)
             
-            interests = profile.to_list()
-            logger.info(f"Extracted interests (semantic): {interests}")
+            # Return categories with score >= 0.3
+            interests = [
+                cat for cat, score in profile.category_scores.to_dict().items()
+                if score >= 0.3
+            ]
+            
+            logger.info(f"Extracted interests from history: {interests}")
             return interests
         except Exception as e:
-            logger.warning(f"Semantic interest extraction failed, falling back to LLM: {e}")
+            logger.warning(f"Fixed category extraction failed, falling back to LLM: {e}")
             try:
                 queries_text = "\n".join(f"- {q}" for q in chat_history)
                 result: ExtractedInterests = self.interest_extractor.invoke({"queries": queries_text})
@@ -217,28 +225,56 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
                 return []
 
     def update_interest_profile(self, profile_dict: Dict, query: str) -> Dict:
-        """Update an interest profile with a new query. Returns updated profile dict."""
-        from .interests import InterestProfile, update_interest_profile
+        """
+        Update an interest profile with a new query.
         
-        profile = InterestProfile(**profile_dict) if profile_dict else InterestProfile()
+        Args:
+            profile_dict: Current profile as {category: score} dict
+            query: User's query to analyze
+            
+        Returns:
+            Updated profile as {category: score} dict
+        """
+        from .interests import InterestProfile, CategoryScores, update_interest_profile, CATEGORY_NAMES
+        
+        # Initialize or load profile
+        if profile_dict:
+            # Ensure we only have valid category keys
+            clean_dict = {k: v for k, v in profile_dict.items() if k in CATEGORY_NAMES}
+            profile = InterestProfile(category_scores=CategoryScores.from_dict(clean_dict))
+        else:
+            profile = InterestProfile()
+        
+        # Update with new query
         updated = update_interest_profile(profile, query, self.topic_matcher)
-        return updated.model_dump()
+        
+        # Return as simple dict for storage
+        return updated.category_scores.to_dict()
 
     def compute_article_match(self, article_data: Dict, interest_profile_dict: Dict) -> Dict[str, Any]:
         """
         Compute match score between an article and user interest profile.
+        Uses fixed category scoring for consistent personalization.
+        
         Returns dict with score, matching_topics, and should_notify.
         """
-        from .interests import InterestProfile, ArticleTopics
+        from .interests import InterestProfile, CategoryScores, CATEGORY_NAMES
         
-        profile = InterestProfile(**interest_profile_dict) if interest_profile_dict else InterestProfile()
+        # Build user profile from dict
+        if interest_profile_dict:
+            clean_dict = {k: v for k, v in interest_profile_dict.items() if k in CATEGORY_NAMES}
+            profile = InterestProfile(category_scores=CategoryScores.from_dict(clean_dict))
+        else:
+            profile = InterestProfile()
         
+        # Classify the article
         article_topics = self.topic_matcher.extract_article_topics(
             title=article_data.get('title', ''),
             summary=article_data.get('summary', ''),
             tags=article_data.get('tags', [])
         )
         
+        # Compute match
         should_notify, score, matching = self.topic_matcher.should_notify_user(
             article_topics, profile, threshold=0.5
         )
@@ -247,7 +283,8 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
             'match_score': score,
             'matching_topics': matching,
             'should_notify': should_notify,
-            'article_topics': article_topics.model_dump()
+            'article_topics': article_topics.model_dump(),
+            'article_category_scores': article_topics.get_category_scores().to_dict()
         }
 
     def search_enhanced(self, query: str, top_k: int = 5, category: Optional[str] = None,
@@ -255,38 +292,38 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
                         user_interests: Optional[List[str]] = None,
                         interest_profile: Optional[Dict] = None) -> List[Dict[str, Any]]:
         """
-        Enhanced search with semantic interest matching.
+        Enhanced search with fixed category-based interest matching.
         
         Args:
             query: Search query
             top_k: Number of results
             category: Category filter
             use_query_expansion: Whether to expand the query
-            user_interests: Simple list of interests (backward compatible)
-            interest_profile: Full interest profile dict (preferred)
+            user_interests: Simple list of category names (backward compatible)
+            interest_profile: Full interest profile dict {category: score} (preferred)
         """
         search_query = self.expand_query(query) if use_query_expansion else query
         top_k = min(max(1, top_k), 20)
         results = self.vector_store.search(query=search_query, top_k=top_k * 2, category_filter=category)
         
-        from .interests import InterestProfile, UserInterest
+        from .interests import InterestProfile, CategoryScores, CATEGORY_NAMES
         
-        profile = None
+        # Build user's category scores from profile
+        user_category_scores = {}
         if interest_profile:
-            # Convert dict format {"topic": confidence} to InterestProfile
-            interests_dict = {}
-            for topic, conf in interest_profile.items():
-                if isinstance(conf, (int, float)):
-                    interests_dict[topic] = UserInterest(topic=topic, confidence=float(conf))
-                elif isinstance(conf, dict):
-                    interests_dict[topic] = UserInterest(**conf)
-            profile = InterestProfile(interests=interests_dict)
+            # Prefer the new format: {category: score}
+            for cat in CATEGORY_NAMES:
+                if cat in interest_profile:
+                    score = interest_profile[cat]
+                    if isinstance(score, (int, float)):
+                        user_category_scores[cat] = float(score)
+                    elif isinstance(score, dict) and 'confidence' in score:
+                        user_category_scores[cat] = float(score['confidence'])
         elif user_interests:
-            # Simple list of interests
-            interests_dict = {}
+            # Simple list of interests - assign equal weights
             for interest in user_interests:
-                interests_dict[interest] = UserInterest(topic=interest, confidence=0.5)
-            profile = InterestProfile(interests=interests_dict)
+                if interest in CATEGORY_NAMES:
+                    user_category_scores[interest] = 0.5
         
         scored_results = []
         query_terms = query.lower().split()
@@ -299,17 +336,26 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
             category_boost = 0.05 if category and r.category == category else 0.0
             
             interest_boost = 0.0
-            matching_interests = []
+            matching_categories = []
             
-            if profile and profile.interests:
-                article_topics = self.topic_matcher.extract_article_topics(
-                    title=r.title,
-                    summary=r.summary,
-                    tags=r.tags or []
+            if user_category_scores:
+                # Classify article into fixed categories
+                article_scores = self.topic_matcher.classify_text(
+                    f"{r.title} {r.summary}"
                 )
-                interest_boost, matching_interests = self.topic_matcher.compute_interest_match_score(
-                    article_topics, profile
-                )
+                article_dict = article_scores.to_dict()
+                
+                # Compute overlap between user interests and article categories
+                for cat in CATEGORY_NAMES:
+                    user_score = user_category_scores.get(cat, 0.0)
+                    article_score = article_dict.get(cat, 0.0)
+                    
+                    if user_score >= 0.2 and article_score >= 0.2:
+                        contribution = user_score * article_score * 0.15
+                        interest_boost += contribution
+                        if contribution >= 0.03:
+                            matching_categories.append(cat)
+                
                 interest_boost = min(0.25, interest_boost)
             
             result_dict = r.to_dict()
@@ -317,7 +363,7 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
             result_dict["relevance_score"] = round(min(1.0, total_boost), 4)
             result_dict["original_similarity"] = round(base_score, 4)
             result_dict["personalized"] = interest_boost > 0
-            result_dict["matching_interests"] = matching_interests
+            result_dict["matching_interests"] = matching_categories
             scored_results.append(result_dict)
         
         scored_results.sort(key=lambda x: x["relevance_score"], reverse=True)
