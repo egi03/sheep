@@ -425,8 +425,8 @@ def get_articles(request):
                         'title': source.get('title', 'No Title'),
                         'url': source.get('url', ''),
                         'summary': source.get('summary', ''),
-                        'author': source.get('author', 'Unknown'),
-                        'category': source.get('category', 'Other'),
+                        'author': source.get('author') or 'Unknown',
+                        'category': source.get('category') or 'Other',
                         'relevance_score': source.get('relevance_score', 0),
                     })
                 
