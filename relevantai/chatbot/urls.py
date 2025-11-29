@@ -23,4 +23,9 @@ urlpatterns = [
     
     # Debug endpoint
     path('api/debug/', views.debug_system, name='debug_system'),
+    
+    # Authentication
+    path('api/login/', views.login_api, name='login_api'),
+    path('api/signup/', views.signup_api, name='signup_api'),
+    path('api/logout/', views.logout_api, name='logout_api'),
 ]

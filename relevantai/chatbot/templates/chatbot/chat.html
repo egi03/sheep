@@ -842,6 +842,107 @@
             color: var(--text-secondary);
             margin-left: auto;
         }
+
+        /* Auth Modal Styles */
+        .auth-form {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .form-input {
+            background-color: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-size: 1rem;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        .form-input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+        }
+
+        .auth-btn {
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 14px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .auth-btn:hover {
+            filter: brightness(1.1);
+            transform: translateY(-2px);
+        }
+
+        .auth-switch {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-top: 10px;
+        }
+
+        .auth-switch a {
+            color: var(--primary-color);
+            text-decoration: none;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .auth-switch a:hover {
+            text-decoration: underline;
+        }
+
+        .header-auth {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .auth-trigger-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            padding: 8px 16px;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .auth-trigger-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .user-display {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -855,6 +956,9 @@
             <div class="status-badge">
                 <div class="status-dot"></div>
                 Online
+            </div>
+            <div class="header-auth" id="headerAuth">
+                <!-- Will be populated by JS -->
             </div>
         </header>
 
@@ -927,7 +1031,155 @@
         </div>
     </div>
 
+    <!-- Auth Modal -->
+    <div class="modal-overlay" id="authModal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2 class="modal-title" id="authTitle">Log In</h2>
+                <button class="close-btn" onclick="closeAuthModal()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="authForm" class="auth-form" onsubmit="handleAuth(event)">
+                    <div class="form-group">
+                        <label class="form-label">Username</label>
+                        <input type="text" id="usernameInput" class="form-input" required>
+                    </div>
+                    <div class="form-group" id="emailGroup" style="display: none;">
+                        <label class="form-label">Email (Optional)</label>
+                        <input type="email" id="emailInput" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Password</label>
+                        <input type="password" id="passwordInput" class="form-input" required>
+                    </div>
+                    <button type="submit" class="auth-btn" id="authSubmitBtn">Log In</button>
+                </form>
+                <div class="auth-switch" id="authSwitch">
+                    Don't have an account? <a onclick="toggleAuthMode()">Sign up</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // User State
+        let isAuthenticated = {{ user.is_authenticated|yesno:"true,false" }};
+        let currentUsername = "{{ user.username|default:'' }}";
+        let isLoginMode = true;
+
+        // Initialize Header
+        function updateHeader() {
+            const headerAuth = document.getElementById('headerAuth');
+            if (isAuthenticated) {
+                headerAuth.innerHTML = `
+                    <div class="user-display">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                        ${currentUsername}
+                    </div>
+                    <button class="auth-trigger-btn" onclick="handleLogout()">Log Out</button>
+                `;
+            } else {
+                headerAuth.innerHTML = `
+                    <button class="auth-trigger-btn" onclick="openAuthModal(true)">Log In / Sign Up</button>
+                `;
+            }
+        }
+        updateHeader();
+
+        // Auth Modal Functions
+        function openAuthModal(login = true) {
+            const modal = document.getElementById('authModal');
+            isLoginMode = login;
+            updateAuthUI();
+            modal.classList.add('active');
+        }
+
+        function closeAuthModal() {
+            document.getElementById('authModal').classList.remove('active');
+        }
+
+        function toggleAuthMode() {
+            isLoginMode = !isLoginMode;
+            updateAuthUI();
+        }
+
+        function updateAuthUI() {
+            const title = document.getElementById('authTitle');
+            const submitBtn = document.getElementById('authSubmitBtn');
+            const switchText = document.getElementById('authSwitch');
+            const emailGroup = document.getElementById('emailGroup');
+
+            if (isLoginMode) {
+                title.textContent = 'Log In';
+                submitBtn.textContent = 'Log In';
+                switchText.innerHTML = 'Don\'t have an account? <a onclick="toggleAuthMode()">Sign up</a>';
+                emailGroup.style.display = 'none';
+            } else {
+                title.textContent = 'Sign Up';
+                submitBtn.textContent = 'Sign Up';
+                switchText.innerHTML = 'Already have an account? <a onclick="toggleAuthMode()">Log in</a>';
+                emailGroup.style.display = 'flex';
+            }
+        }
+
+        async function handleAuth(e) {
+            e.preventDefault();
+            const username = document.getElementById('usernameInput').value;
+            const password = document.getElementById('passwordInput').value;
+            const email = document.getElementById('emailInput').value;
+
+            const endpoint = isLoginMode ? '/api/login/' : '/api/signup/';
+            
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrftoken
+                    },
+                    body: JSON.stringify({ username, password, email })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    isAuthenticated = true;
+                    currentUsername = data.username;
+                    updateHeader();
+                    closeAuthModal();
+                    // Reload to ensure session is picked up everywhere if needed, or just continue
+                    // location.reload(); 
+                } else {
+                    alert(data.error || 'Authentication failed');
+                }
+            } catch (error) {
+                console.error('Auth error:', error);
+                alert('An error occurred');
+            }
+        }
+
+        async function handleLogout() {
+            try {
+                await fetch('/api/logout/', {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrftoken
+                    }
+                });
+                isAuthenticated = false;
+                currentUsername = '';
+                updateHeader();
+                location.reload();
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+        }
+
         // CSRF Token
         function getCookie(name) {
             let cookieValue = null;
@@ -966,6 +1218,11 @@
 
         // Send message function
         async function sendMessage() {
+            if (!isAuthenticated) {
+                openAuthModal(true);
+                return;
+            }
+
             const message = messageInput.value.trim();
             if (!message) return;
 
