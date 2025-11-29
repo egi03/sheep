@@ -55,6 +55,7 @@ class ChatSession(models.Model):
     
     session_id = models.CharField(max_length=255, unique=True, db_index=True)
     interested_topics = models.JSONField(default=list, blank=True)
+    interest_profile = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -63,6 +64,19 @@ class ChatSession(models.Model):
     
     def __str__(self):
         return f"Session {self.session_id}"
+    
+    def get_interest_profile(self):
+        """Get interest profile as Pydantic model."""
+        from rag.interests import InterestProfile
+        if self.interest_profile:
+            return InterestProfile(**self.interest_profile)
+        return InterestProfile()
+    
+    def set_interest_profile(self, profile):
+        """Set interest profile from Pydantic model."""
+        self.interest_profile = profile.model_dump()
+        self.interested_topics = profile.to_list()
+        self.save(update_fields=['interest_profile', 'interested_topics', 'updated_at'])
 
 
 class ChatMessage(models.Model):
@@ -136,3 +150,93 @@ class ScrapingRun(models.Model):
         self.error_message = error_message
         self.completed_at = timezone.now()
         self.save()
+
+
+class UserProfile(models.Model):
+    """
+    User profile for personalization and notifications.
+    Links to Django auth User when available, or works standalone with email.
+    """
+    
+    email = models.EmailField(unique=True, db_index=True)
+    session = models.OneToOneField(
+        ChatSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='user_profile'
+    )
+    
+    interest_profile = models.JSONField(default=dict, blank=True)
+    
+    email_notifications_enabled = models.BooleanField(default=False)
+    notification_threshold = models.FloatField(default=0.5)
+    notification_frequency = models.CharField(
+        max_length=20,
+        choices=[
+            ('instant', 'Instant'),
+            ('daily', 'Daily Digest'),
+            ('weekly', 'Weekly Digest'),
+        ],
+        default='daily'
+    )
+    last_notification_sent = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Profile: {self.email}"
+    
+    def get_interest_profile(self):
+        """Get interest profile as Pydantic model."""
+        from rag.interests import InterestProfile
+        if self.interest_profile:
+            return InterestProfile(**self.interest_profile)
+        return InterestProfile()
+    
+    def set_interest_profile(self, profile):
+        """Set interest profile from Pydantic model."""
+        self.interest_profile = profile.model_dump()
+        self.save(update_fields=['interest_profile', 'updated_at'])
+
+
+class ArticleInterestMatch(models.Model):
+    """
+    Tracks matches between articles and user interests.
+    Used for sending notifications about new relevant articles.
+    """
+    
+    article = models.ForeignKey(
+        Article,
+        on_delete=models.CASCADE,
+        related_name='interest_matches'
+    )
+    user_profile = models.ForeignKey(
+        UserProfile,
+        on_delete=models.CASCADE,
+        related_name='article_matches'
+    )
+    
+    match_score = models.FloatField()
+    matching_topics = models.JSONField(default=list)
+    
+    notification_sent = models.BooleanField(default=False)
+    notification_sent_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-match_score', '-created_at']
+        unique_together = ['article', 'user_profile']
+        indexes = [
+            models.Index(fields=['notification_sent', 'match_score']),
+            models.Index(fields=['user_profile', 'notification_sent']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user_profile.email} <- {self.article.title[:30]} ({self.match_score:.2f})"
+

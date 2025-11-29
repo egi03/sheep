@@ -99,6 +99,9 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
                 ("human", self.INTEREST_EXTRACTION_PROMPT)
             ]) | self.llm_fast.with_structured_output(ExtractedInterests)
             
+            from .interests import TopicMatcher
+            self.topic_matcher = TopicMatcher(self.vector_store.embeddings)
+            
             logger.info("RelevantAI initialized")
         except ConfigurationError:
             raise
@@ -188,30 +191,105 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
             return query
 
     def extract_user_interests(self, chat_history: List[str]) -> List[str]:
-        """Extract user interests from chat history using GPT-4o-mini."""
+        """Extract user interests from chat history using semantic matching."""
         if not chat_history:
             return []
         
         try:
-            queries_text = "\n".join(f"- {q}" for q in chat_history)
-            result: ExtractedInterests = self.interest_extractor.invoke({"queries": queries_text})
-            interests = [i.strip() for i in result.interests if i.strip()]
-            logger.info(f"Extracted interests: {interests}")
-            return interests[:5]
+            from .interests import InterestProfile, update_interest_profile
+            
+            profile = InterestProfile()
+            for query in chat_history:
+                profile = update_interest_profile(profile, query, self.topic_matcher)
+            
+            interests = profile.to_list()
+            logger.info(f"Extracted interests (semantic): {interests}")
+            return interests
         except Exception as e:
-            logger.warning(f"Interest extraction failed: {e}")
-            return []
+            logger.warning(f"Semantic interest extraction failed, falling back to LLM: {e}")
+            try:
+                queries_text = "\n".join(f"- {q}" for q in chat_history)
+                result: ExtractedInterests = self.interest_extractor.invoke({"queries": queries_text})
+                interests = [i.strip() for i in result.interests if i.strip()]
+                return interests[:5]
+            except Exception as e2:
+                logger.warning(f"LLM interest extraction also failed: {e2}")
+                return []
+
+    def update_interest_profile(self, profile_dict: Dict, query: str) -> Dict:
+        """Update an interest profile with a new query. Returns updated profile dict."""
+        from .interests import InterestProfile, update_interest_profile
+        
+        profile = InterestProfile(**profile_dict) if profile_dict else InterestProfile()
+        updated = update_interest_profile(profile, query, self.topic_matcher)
+        return updated.model_dump()
+
+    def compute_article_match(self, article_data: Dict, interest_profile_dict: Dict) -> Dict[str, Any]:
+        """
+        Compute match score between an article and user interest profile.
+        Returns dict with score, matching_topics, and should_notify.
+        """
+        from .interests import InterestProfile, ArticleTopics
+        
+        profile = InterestProfile(**interest_profile_dict) if interest_profile_dict else InterestProfile()
+        
+        article_topics = self.topic_matcher.extract_article_topics(
+            title=article_data.get('title', ''),
+            summary=article_data.get('summary', ''),
+            tags=article_data.get('tags', [])
+        )
+        
+        should_notify, score, matching = self.topic_matcher.should_notify_user(
+            article_topics, profile, threshold=0.5
+        )
+        
+        return {
+            'match_score': score,
+            'matching_topics': matching,
+            'should_notify': should_notify,
+            'article_topics': article_topics.model_dump()
+        }
 
     def search_enhanced(self, query: str, top_k: int = 5, category: Optional[str] = None,
                         use_query_expansion: bool = True, 
-                        user_interests: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                        user_interests: Optional[List[str]] = None,
+                        interest_profile: Optional[Dict] = None) -> List[Dict[str, Any]]:
+        """
+        Enhanced search with semantic interest matching.
+        
+        Args:
+            query: Search query
+            top_k: Number of results
+            category: Category filter
+            use_query_expansion: Whether to expand the query
+            user_interests: Simple list of interests (backward compatible)
+            interest_profile: Full interest profile dict (preferred)
+        """
         search_query = self.expand_query(query) if use_query_expansion else query
         top_k = min(max(1, top_k), 20)
         results = self.vector_store.search(query=search_query, top_k=top_k * 2, category_filter=category)
         
+        from .interests import InterestProfile, UserInterest
+        
+        profile = None
+        if interest_profile:
+            # Convert dict format {"topic": confidence} to InterestProfile
+            interests_dict = {}
+            for topic, conf in interest_profile.items():
+                if isinstance(conf, (int, float)):
+                    interests_dict[topic] = UserInterest(topic=topic, confidence=float(conf))
+                elif isinstance(conf, dict):
+                    interests_dict[topic] = UserInterest(**conf)
+            profile = InterestProfile(interests=interests_dict)
+        elif user_interests:
+            # Simple list of interests
+            interests_dict = {}
+            for interest in user_interests:
+                interests_dict[interest] = UserInterest(topic=interest, confidence=0.5)
+            profile = InterestProfile(interests=interests_dict)
+        
         scored_results = []
         query_terms = query.lower().split()
-        interests_lower = [i.lower() for i in (user_interests or [])]
         
         for r in results:
             base_score = r.similarity_score
@@ -221,20 +299,25 @@ Return ONLY a comma-separated list of interests (e.g., "Ransomware, Python, Zero
             category_boost = 0.05 if category and r.category == category else 0.0
             
             interest_boost = 0.0
-            if interests_lower:
-                category_lower = r.category.lower() if r.category else ""
-                tags_lower = [t.lower() for t in (r.tags or [])]
-                
-                if any(interest in category_lower for interest in interests_lower):
-                    interest_boost += 0.15
-                if any(interest in tag for interest in interests_lower for tag in tags_lower):
-                    interest_boost += 0.10
+            matching_interests = []
+            
+            if profile and profile.interests:
+                article_topics = self.topic_matcher.extract_article_topics(
+                    title=r.title,
+                    summary=r.summary,
+                    tags=r.tags or []
+                )
+                interest_boost, matching_interests = self.topic_matcher.compute_interest_match_score(
+                    article_topics, profile
+                )
+                interest_boost = min(0.25, interest_boost)
             
             result_dict = r.to_dict()
             total_boost = base_score + title_boost + category_boost + interest_boost
             result_dict["relevance_score"] = round(min(1.0, total_boost), 4)
             result_dict["original_similarity"] = round(base_score, 4)
             result_dict["personalized"] = interest_boost > 0
+            result_dict["matching_interests"] = matching_interests
             scored_results.append(result_dict)
         
         scored_results.sort(key=lambda x: x["relevance_score"], reverse=True)

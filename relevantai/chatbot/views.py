@@ -11,6 +11,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Q
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.models import User
+from django.db import IntegrityError
 
 from .models import Article, ChatSession, ChatMessage, ScrapingRun
 
@@ -63,6 +66,11 @@ def get_or_create_session(request) -> ChatSession:
         request.session['chat_session_id'] = session_id
     
     session, created = ChatSession.objects.get_or_create(session_id=session_id)
+    
+    if request.user.is_authenticated and not session.user:
+        session.user = request.user
+        session.save(update_fields=['user'])
+
     return session
 
 
@@ -118,6 +126,7 @@ def ask_question(request):
     API endpoint to ask a question to the RAG system.
     This is the main Q&A endpoint that returns intelligent answers with sources.
     Includes user memory & personalization based on chat history.
+    Uses semantic topic matching for interest extraction and personalization.
     """
     try:
         data = json.loads(request.body)
@@ -148,7 +157,10 @@ def ask_question(request):
                     message_type='user'
                 ).count()
                 
-                # Extract interests every 3 messages
+                # Load existing interest profile from session
+                interest_profile = session.interest_profile or {}
+                
+                # Extract interests every 3 messages using semantic matching
                 if user_message_count % 3 == 0 and user_message_count > 0:
                     recent_queries = list(
                         ChatMessage.objects.filter(
@@ -158,20 +170,35 @@ def ask_question(request):
                     )
                     if recent_queries:
                         try:
-                            interests = rag.extract_user_interests(recent_queries)
-                            if interests:
-                                session.interested_topics = interests
-                                session.save(update_fields=['interested_topics'])
-                                logger.info(f"Updated session interests: {interests}")
+                            # Extract interests using TopicMatcher (returns list of topic strings)
+                            new_interests = rag.extract_user_interests(recent_queries)
+                            if new_interests:
+                                # Update interest profile with new interests
+                                # Each interest gets a confidence boost based on frequency
+                                for topic in new_interests:
+                                    if topic in interest_profile:
+                                        # Increase confidence for existing interests
+                                        interest_profile[topic] = min(1.0, interest_profile[topic] + 0.1)
+                                    else:
+                                        # Add new interest with initial confidence
+                                        interest_profile[topic] = 0.5
+                                
+                                # Save updated profile
+                                session.interest_profile = interest_profile
+                                session.save(update_fields=['interest_profile'])
+                                logger.info(f"Updated session interest profile: {list(interest_profile.keys())}")
                         except Exception as e:
                             logger.warning(f"Failed to extract interests: {e}")
+                
+                # Convert interest profile to list of topics for RAG (backward compatible)
+                user_interests = list(interest_profile.keys()) if interest_profile else []
                 
                 # Use the RAG system with personalization
                 result = rag.ask(
                     question=question,
                     top_k=settings.RAG_CONFIG.get('top_k', 5),
                     category=data.get('category'),
-                    user_interests=session.interested_topics or []
+                    user_interests=user_interests
                 )
                 
                 # Save assistant message with full context
@@ -192,7 +219,8 @@ def ask_question(request):
                     'key_insights': result.get('key_insights', []),
                     'sources': result.get('sources', []),
                     'expanded_query': result.get('expanded_query', ''),
-                    'user_interests': session.interested_topics or [],
+                    'user_interests': user_interests,
+                    'interest_profile': interest_profile,
                     'mode': 'rag'
                 })
                 
