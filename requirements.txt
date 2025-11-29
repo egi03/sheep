@@ -1,0 +1,28 @@
+# HN Intelligence RAG System - Requirements
+# Python 3.10+ required
+
+# =============================================================================
+# Core Dependencies (REQUIRED)
+# =============================================================================
+
+# LangChain Framework
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+
+# OpenAI SDK
+openai>=1.50.0
+
+# Pinecone Vector Database
+pinecone>=5.0.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# =============================================================================
+# Installation
+# =============================================================================
+# pip install -r requirements.txt
