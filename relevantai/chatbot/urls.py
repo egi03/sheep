@@ -35,4 +35,9 @@ urlpatterns = [
     path('api/chat/sessions/<str:session_id>/', views.get_chat_messages, name='get_chat_messages'),
     path('api/chat/sessions/<str:session_id>/switch/', views.switch_chat_session, name='switch_chat_session'),
     path('api/chat/sessions/<str:session_id>/delete/', views.delete_chat_session, name='delete_chat_session'),
+    
+    # User Preferences & Interests
+    path('api/user/interests/', views.get_user_interests, name='get_user_interests'),
+    path('api/user/interests/update/', views.update_user_interests, name='update_user_interests'),
+    path('api/user/notifications/', views.update_notification_settings, name='update_notification_settings'),
 ]

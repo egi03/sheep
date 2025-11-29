@@ -15,7 +15,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.db import IntegrityError
 
-from .models import Article, ChatSession, ChatMessage, ScrapingRun
+from .models import Article, ChatSession, ChatMessage, ScrapingRun, UserProfile
 
 # Configure logging to show DEBUG level
 logging.basicConfig(level=logging.DEBUG)
@@ -853,3 +853,111 @@ def delete_chat_session(request, session_id):
         return JsonResponse({'success': True})
     except ChatSession.DoesNotExist:
         return JsonResponse({'success': False, 'error': 'Session not found'}, status=404)
+
+
+# ============================================================================
+# User Preferences & Interests API Endpoints
+# ============================================================================
+
+def get_or_create_user_profile(user):
+    """Get or create a UserProfile for the given user."""
+    try:
+        return UserProfile.objects.get(user=user)
+    except UserProfile.DoesNotExist:
+        return UserProfile.objects.create(
+            user=user,
+            email=user.email or f"{user.username}@placeholder.com"
+        )
+
+
+@require_http_methods(["GET"])
+def get_user_interests(request):
+    """Get the current user's interest topics and notification settings."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+    
+    profile = get_or_create_user_profile(request.user)
+    
+    # Get interest scores from current session if available
+    session = get_or_create_session(request)
+    interest_scores = session.interest_profile or {}
+    
+    # Get top interests (score >= 0.2)
+    top_interests = [
+        {'topic': topic, 'score': round(score, 2)}
+        for topic, score in sorted(interest_scores.items(), key=lambda x: x[1], reverse=True)
+        if score >= 0.2
+    ]
+    
+    # Get the user's selected topics for notifications
+    selected_topics = profile.interested_topics or []
+    
+    return JsonResponse({
+        'success': True,
+        'interests': top_interests,
+        'selected_topics': selected_topics,
+        'email': profile.email,
+        'notifications_enabled': profile.email_notifications_enabled,
+        'notification_frequency': profile.notification_frequency
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def update_user_interests(request):
+    """Update the user's selected topics for notifications."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+    
+    try:
+        data = json.loads(request.body)
+        selected_topics = data.get('selected_topics', [])
+        
+        # Validate topics against allowed categories
+        from rag.interests import CATEGORY_NAMES
+        valid_topics = [t for t in selected_topics if t in CATEGORY_NAMES]
+        
+        profile = get_or_create_user_profile(request.user)
+        profile.interested_topics = valid_topics
+        profile.save(update_fields=['interested_topics', 'updated_at'])
+        
+        return JsonResponse({
+            'success': True,
+            'selected_topics': valid_topics
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def update_notification_settings(request):
+    """Update the user's email notification settings."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+    
+    try:
+        data = json.loads(request.body)
+        
+        profile = get_or_create_user_profile(request.user)
+        
+        if 'email' in data and data['email']:
+            profile.email = data['email']
+        
+        if 'notifications_enabled' in data:
+            profile.email_notifications_enabled = bool(data['notifications_enabled'])
+        
+        if 'frequency' in data:
+            if data['frequency'] in ['instant', 'daily', 'weekly']:
+                profile.notification_frequency = data['frequency']
+        
+        profile.save()
+        
+        return JsonResponse({
+            'success': True,
+            'email': profile.email,
+            'notifications_enabled': profile.email_notifications_enabled,
+            'notification_frequency': profile.notification_frequency
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)

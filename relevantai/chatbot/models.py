@@ -181,6 +181,13 @@ class UserProfile(models.Model):
     Links to Django auth User when available, or works standalone with email.
     """
     
+    user = models.OneToOneField(
+        'auth.User',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='profile'
+    )
     email = models.EmailField(unique=True, db_index=True)
     session = models.OneToOneField(
         ChatSession,
@@ -190,6 +197,8 @@ class UserProfile(models.Model):
         related_name='user_profile'
     )
     
+    # Topics the user is interested in (list of category names)
+    interested_topics = models.JSONField(default=list, blank=True)
     interest_profile = models.JSONField(default=dict, blank=True)
     
     email_notifications_enabled = models.BooleanField(default=False)
